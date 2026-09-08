@@ -1,0 +1,58 @@
+name: AKS DevOps Pipeline
+
+on:
+  push:
+    branches:
+      - main  # Triggers the pipeline every time you push code to the main branch
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AZURE_RESOURCE_GROUP: "AKSeBPF-RG"
+  AZURE_CLUSTER_NAME: "eBPFCluster"
+  AZURE_ACR_NAME: "myuniqueacrregistry" # Replace with your actual ACR name
+  APP_NAME: "my-devops-app"
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+    
+    # 1. Checkout the source code from your GitHub repository
+    - name: Checkout Code
+      uses: actions/checkout@v4
+
+    # 2. Log in to Azure using the secure credentials saved in GitHub Secrets
+    - name: Azure Login
+      uses: azure/login@v2
+      with:
+        creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+    # 3. Log in to your private Azure Container Registry (ACR)
+    - name: Login to ACR
+      run: |
+        az acr login --name ${{ env.AZURE_ACR_NAME }}
+
+    # 4. Build the container image and tag it with the unique GitHub commit ID
+    - name: Build and Push Container Image
+      run: |
+        docker build -t ${{ env.AZURE_ACR_NAME }}.azurecr.io/${{ env.APP_NAME }}:${{ github.sha }} .
+        docker push ${{ env.AZURE_ACR_NAME }}.azurecr.io/${{ env.APP_NAME }}:${{ github.sha }}
+
+    # 5. Set the context so kubectl knows which AKS cluster to talk to
+    - name: Set AKS Context
+      uses: azure/aks-set-context@v4
+      with:
+        resource-group: ${{ env.AZURE_RESOURCE_GROUP }}
+        cluster-name: ${{ env.AZURE_CLUSTER_NAME }}
+
+    # 6. Dynamically swap the image tag inside your manifest and deploy it to AKS
+    - name: Deploy to AKS
+      run: |
+        # Use sed to substitute the placeholder image in your manifest file with the newly built image
+        sed -i "s|image:.*|image: ${{ env.AZURE_ACR_NAME }}.azurecr.io/${{ env.APP_NAME }}:${{ github.sha }}|g" manifests/deployment.yaml
+        
+        # Apply the manifests directly into your eBPF-powered AKS cluster
+        kubectl apply -f manifests/deployment.yaml
